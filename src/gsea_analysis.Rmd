@@ -1,0 +1,222 @@
+---
+title: "Proximity Labeled PPI GSEA Analysis"
+author: "Matthew Berginski"
+date: "`r Sys.Date()`"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(here)
+library(readxl)
+library(janitor)
+library(hypeR)
+library(tictoc)
+library(knitr)
+
+library(BerginskiRMisc)
+
+knitr::opts_knit$set(root.dir = here())
+
+knitr::opts_chunk$set(echo = F)
+```
+
+Let's load the data and make a quick histogram showing the number of prey for each experiment ID.
+
+```{r, include = F}
+PPI_results = read_excel(here('data/95IDG-BAITS_4PC_ProximityData_20220105.xlsx'), sheet = 2)
+
+names(PPI_results) = as.character(PPI_results[1,])
+
+PPI_results = PPI_results %>%
+	filter(Experiment.ID != "Experiment.ID") %>%
+	clean_names()
+```
+
+```{r, message=F}
+PPI_hit_count = PPI_results %>% count(experiment_id)
+
+ggplot(PPI_hit_count, aes(x=n)) +
+	geom_histogram() +
+	labs(x="Number of Prey Proteins",y="Number of Bait Proteins") +
+	theme_berginski()
+```
+
+My strategy for the rest of this analysis is to load a gene set and then run a standard gene set enrichment for each of the Prey protein lists corresponding to each bait. There are many different possible lists to use (http://www.gsea-msigdb.org/gsea/msigdb/index.jsp). Trying out any the lists on that website is very easy, but I've picked out three that we happen to like. To deal with the fact that I'm going to be running 
+`r length(unique(PPI_results$first_bait_uniprot))` of these tests, I've divided the FDR target (0.01) by that number.
+
+As for how to visualize/use all these results, let me know what you think. For now, I've shown the distribution of gene set hit counts and pulled out the top 10 most observed gene set hits.
+
+# Reactome
+
+```{r, include = F, cache=T}
+REACTOME <- msigdb_gsets(species="Homo sapiens", category="C2", subcategory="CP:REACTOME")
+
+REACTOME_results = data.frame()
+
+for (this_experiment in unique(PPI_results$experiment_id)) {
+	temp = hypeR(PPI_results %>%
+							 	filter(experiment_id == this_experiment) %>%
+							 	pull(prey_gene),
+							 REACTOME, fdr = 0.01/length(unique(PPI_results$first_bait_uniprot)))
+
+	REACTOME_results = bind_rows(
+		temp$data %>%
+			rownames_to_column(var = "gene_set") %>%
+			mutate(experiment_id = this_experiment),
+		REACTOME_results
+	)
+}
+
+REACTOME_results = REACTOME_results %>%
+	select(experiment_id, everything())
+```
+
+The REACTOME gene sets includes `r length(names(REACTOME$genesets))` gene sets. Of the `r length(unique(PPI_results$first_bait_uniprot))` bait proteins, `r length(unique(REACTOME_results$experiment_id))` have a hit in the REACTOME gene sets. The distribution of the number of hits for each experiment look like this:
+
+```{r, message=F}
+REACTOME_results_count = REACTOME_results %>% 
+	count(experiment_id)
+
+missing_exp_ids = unique(PPI_results$experiment_id)[!unique(PPI_results$experiment_id) %in% REACTOME_results_count$experiment_id]
+
+REACTOME_results_count = REACTOME_results_count %>%
+	add_row(experiment_id = missing_exp_ids,
+					n = 0)
+
+ggplot(REACTOME_results_count, aes(x=n)) +
+	geom_histogram() +
+	labs(x= "Number of Gene Set Hits", y="Number of Experiments") + 
+	theme_berginski()
+```
+
+Looking at the gene sets that appear often in the hit list, here are the 10 gene sets with the most hits in the set:
+
+```{r}
+REACTOME_set_counts = REACTOME_results %>%
+	count(label) %>%
+	arrange(desc(n)) %>%
+	mutate(fraction_hit = signif(n/length(unique(REACTOME_results$experiment_id)),3)) %>%
+	mutate(`Number of Appearances` = n) %>%
+	mutate(`Fraction of Sets with Hits` = fraction_hit)
+
+kable(REACTOME_set_counts %>%
+				slice_head(n = 10) %>%
+				select(-n, -fraction_hit))
+```
+
+# Hallmark
+
+```{r, include = F, cache=T}
+hallmark <- msigdb_gsets(species="Homo sapiens", category="H")
+
+hallmark_results = data.frame()
+
+for (this_experiment in unique(PPI_results$experiment_id)) {
+	temp = hypeR(PPI_results %>%
+							 	filter(experiment_id == this_experiment) %>%
+							 	pull(prey_gene),
+							 hallmark, fdr = 0.01/length(unique(PPI_results$first_bait_uniprot)))
+
+	hallmark_results = bind_rows(
+		temp$data %>%
+			rownames_to_column(var = "gene_set") %>%
+			mutate(experiment_id = this_experiment),
+		hallmark_results
+	)
+}
+
+hallmark_results = hallmark_results %>%
+	select(experiment_id, everything())
+```
+
+The hallmark gene sets includes `r length(names(hallmark$genesets))` gene sets. Of the `r length(unique(PPI_results$first_bait_uniprot))` bait proteins, `r length(unique(hallmark_results$experiment_id))` have a hit in the hallmark gene sets. The distribution of the number of hits for each experiment look like this:
+
+```{r, message=F}
+hallmark_results_count = hallmark_results %>% 
+	count(experiment_id)
+
+missing_exp_ids = unique(PPI_results$experiment_id)[!unique(PPI_results$experiment_id) %in% hallmark_results_count$experiment_id]
+
+hallmark_results_count = hallmark_results_count %>%
+	add_row(experiment_id = missing_exp_ids,
+					n = 0)
+
+ggplot(hallmark_results_count, aes(x=n)) +
+	geom_histogram() +
+	labs(x= "Number of Gene Set Hits", y="Number of Experiments") + 
+	theme_berginski()
+```
+
+Looking at the gene sets that appear often in the hit list, here are the 10 gene sets with the most hits in the set:
+
+```{r}
+hallmark_set_counts = hallmark_results %>%
+	count(label) %>%
+	arrange(desc(n)) %>%
+	mutate(fraction_hit = signif(n/length(unique(hallmark_results$experiment_id)),3)) %>%
+	mutate(`Number of Appearances` = n) %>%
+	mutate(`Fraction of Sets with Hits` = fraction_hit)
+
+kable(hallmark_set_counts %>%
+				slice_head(n = 10) %>%
+				select(-n, -fraction_hit))
+```
+
+# GO - Molecule Function
+
+```{r, include = F, cache=T}
+go_mf <- msigdb_gsets(species="Homo sapiens", category="C5", subcategory="GO:MF")
+
+go_mf_results = data.frame()
+
+for (this_experiment in unique(PPI_results$experiment_id)) {
+	temp = hypeR(PPI_results %>%
+							 	filter(experiment_id == this_experiment) %>%
+							 	pull(prey_gene),
+							 go_mf, fdr = 0.01/length(unique(PPI_results$first_bait_uniprot)))
+
+	go_mf_results = bind_rows(
+		temp$data %>%
+			rownames_to_column(var = "gene_set") %>%
+			mutate(experiment_id = this_experiment),
+		go_mf_results
+	)
+}
+
+go_mf_results = go_mf_results %>%
+	select(experiment_id, everything())
+```
+
+The GO Molecule Function gene sets includes `r length(names(go_mf$genesets))` gene sets. Of the `r length(unique(PPI_results$first_bait_uniprot))` bait proteins, `r length(unique(go_mf_results$experiment_id))` have a hit in the GO Molecule Function gene sets. The distribution of the number of hits for each experiment look like this:
+
+```{r, message=F}
+go_mf_results_count = go_mf_results %>% 
+	count(experiment_id)
+
+missing_exp_ids = unique(PPI_results$experiment_id)[!unique(PPI_results$experiment_id) %in% go_mf_results_count$experiment_id]
+
+go_mf_results_count = go_mf_results_count %>%
+	add_row(experiment_id = missing_exp_ids,
+					n = 0)
+
+ggplot(go_mf_results_count, aes(x=n)) +
+	geom_histogram() +
+	labs(x= "Number of Gene Set Hits", y="Number of Experiments") + 
+	theme_berginski()
+```
+
+Looking at the gene sets that appear often in the hit list, here are the 10 gene sets with the most hits in the set:
+
+```{r}
+go_mf_set_counts = go_mf_results %>%
+	count(label) %>%
+	arrange(desc(n)) %>%
+	mutate(fraction_hit = signif(n/length(unique(go_mf_results$experiment_id)),3)) %>%
+	mutate(`Number of Appearances` = n) %>%
+	mutate(`Fraction of Sets with Hits` = fraction_hit)
+
+kable(go_mf_set_counts %>%
+				slice_head(n = 10) %>%
+				select(-n, -fraction_hit))
+```
